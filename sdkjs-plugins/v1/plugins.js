@@ -32,6 +32,13 @@
         }
     };
 
+    function _sendMessageToParent(data) {
+        if (window.Asc.plugin.ie_channel)
+            window.Asc.plugin.ie_channel.postMessage(data);
+        else
+            window.parent.postMessage(data, "*");
+    }
+
     window.Asc.plugin.tr_init = false;
     window.Asc.plugin.tr = function(val) { return val; }
 
@@ -56,6 +63,34 @@
         return dst;
     }
 
+    function getSearchParam(name) {
+        var _windowSearch = window.location.search;
+        var _nameSearch = name + "=";
+        var _pos1 = _windowSearch.indexOf(_nameSearch);
+        if (_pos1 >= 0)
+        {
+            _pos1 += _nameSearch.length;
+            var _pos2 = _windowSearch.indexOf("&", _pos1);
+            if (_pos2 < 0)
+                _pos2 = _windowSearch.length;
+
+            return _windowSearch.substring(_pos1, _pos2);
+        }
+        return undefined;
+    }
+
+    function checkPluginWindow() {
+        var windowID = getSearchParam("windowID");
+        if (windowID) {
+            window.Asc.plugin.windowID = windowID;
+
+            if (!window.Asc.plugin.guid)
+                window.Asc.plugin.guid = decodeURIComponent(getSearchParam("guid"));
+        }
+
+        return (undefined !== windowID) ? true : false;
+    }
+
     window.onload = function()
     {
         if (!window.Asc || !window.Asc.plugin)
@@ -67,6 +102,9 @@
         xhr.onload = function() {
             if (!window.Asc || !window.Asc.plugin)
                 return;
+            
+            if (xhr.status === 404)
+                return xhr.onerror();
 
             if (xhr.status == 200 || (xhr.status == 0 && xhr.readyState == 4)) {
                 var objConfig = xhr.response;
@@ -79,6 +117,10 @@
                     type : "initialize",
                     guid : window.Asc.plugin.guid
                 };
+
+                if (checkPluginWindow()) {
+                    obj.windowID = window.Asc.plugin.windowID;
+                }
 
                 var _body = document.body;
                 if (_body && true !== window.Asc.plugin.enableDrops) {
@@ -103,23 +145,25 @@
 
                 // ie11 not support message from another domain
                 window.Asc.plugin._initInternal = true;
-
-                var _windowSearch = window.location.search;
-                var _pos1 = _windowSearch.indexOf("windowID=");
-                if (_pos1 >= 0)
-                {
-                    _pos1 += 9;
-                    var _pos2 = _windowSearch.indexOf("&", _pos1);
-                    if (_pos2 < 0)
-                        _pos2 = _windowSearch.length;
-
-                    window.Asc.plugin.windowID = _windowSearch.substring(_pos1, _pos2);
-                    obj.windowID = window.Asc.plugin.windowID;
-                }
-
                 window.parent.postMessage(JSON.stringify(obj), "*");
             }
         };
+        xhr.onerror = function() {
+            if (!window.Asc || !window.Asc.plugin)
+                return;
+
+            if (checkPluginWindow()) {
+                var obj = {
+                    type : "initialize",
+                    guid : window.Asc.plugin.guid
+                };
+                obj.windowID = window.Asc.plugin.windowID;
+
+                // ie11 not support message from another domain
+                window.Asc.plugin._initInternal = true;
+                window.parent.postMessage(JSON.stringify(obj), "*");
+            }
+        }
         xhr.send();
     };
 
@@ -162,17 +206,16 @@
     else
         window.attachEvent("onmessage", onMessage);
 
-    window.Asc.plugin.attachContextMenuClickEvent = function(id, action)
+    window.Asc.plugin._attachCustomMenuClickEvent = function(type, id, action)
     {
-        var pluginObj = window.Asc.plugin;
-        if (!pluginObj.contextMenuEvents)
-            pluginObj.contextMenuEvents = {};
+        if (!this[type])
+            this[type] = {};
 
-        pluginObj.contextMenuEvents[id] = action;
+        this[type][id] = action;
     };
-    window.Asc.plugin.event_onContextMenuClick = function(id)
+    window.Asc.plugin._onCustomMenuClick = function(type, id)
     {
-        var pluginObj = window.Asc.plugin;
+        // parse data from id: text from item.
         var itemId = id;
         var itemData = undefined;
         var itemPos = itemId.indexOf("_oo_sep_");
@@ -182,8 +225,26 @@
             itemId = itemId.substring(0, itemPos);
         }
 
-        if (pluginObj.contextMenuEvents && pluginObj.contextMenuEvents[itemId])
-            pluginObj.contextMenuEvents[itemId].call(pluginObj, itemData);
+        if (this[type] && this[type][itemId])
+           this[type][itemId].call(this, itemData);
+    };
+
+    window.Asc.plugin.attachContextMenuClickEvent = function(id, action)
+    {
+        this._attachCustomMenuClickEvent("contextMenuEvents", id, action);
+    };
+    window.Asc.plugin.event_onContextMenuClick = function(id)
+    {
+        this._onCustomMenuClick("contextMenuEvents", id);
+    };
+
+    window.Asc.plugin.attachToolbarMenuClickEvent = function(id, action)
+    {
+        this._attachCustomMenuClickEvent("toolbarMenuEvents", id, action);
+    };
+    window.Asc.plugin.event_onToolbarMenuClick = function(id)
+    {
+        this._onCustomMenuClick("toolbarMenuEvents", id);
     };
 
     window.Asc.plugin.attachEvent = function(id, action)
@@ -207,10 +268,33 @@
             pluginObj._events[id].call(pluginObj, data);
     };
 
+    window.Asc.plugin.attachEditorEvent = function(id, action)
+    {
+        window.Asc.plugin["event_" + id] = action.bind(window.Asc.plugin);
+
+        _sendMessageToParent(JSON.stringify({
+            "guid" : window.Asc.plugin.guid,
+            "type" : "attachEvent",
+            "name" : id
+        }));
+    };
+    window.Asc.plugin.detachEditorEvent = function(id)
+    {
+        if (window.Asc.plugin["event_" + id])
+            delete window.Asc.plugin["event_" + id];
+
+        _sendMessageToParent(JSON.stringify({
+            "guid" : window.Asc.plugin.guid,
+            "type" : "detachEvent",
+            "name" : id
+        }));
+    };
+
     window.onunload = function() {
         if (window.addEventListener)
             window.removeEventListener("message", onMessage, false);
         else
             window.detachEvent("onmessage", onMessage);
     };
+
 })(window, undefined);

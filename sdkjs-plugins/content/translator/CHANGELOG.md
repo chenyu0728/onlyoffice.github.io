@@ -21,3 +21,15 @@
 * Change working for viewer mode.
 * Disable plugin for IE.
 * Bug Fix
+
+## 1.0.5
+
+* Add "pdf" to the supported editors.
+
+## 1.0.6
+
+* Add message, that plugin doesn't work in user region (if we have some problems with loading necessary data).
+
+## 1.0.7
+
+* Fix problem of repeated translation of the same text.

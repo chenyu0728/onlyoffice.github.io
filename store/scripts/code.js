@@ -16,7 +16,7 @@
  *
  */
 
-const version = '1.0.4';                                             // version of store (will change it when update something in store)
+const version = '1.0.8';                                             // version of store (will change it when update something in store)
 let start = Date.now();
 const isLocal = ( (window.AscDesktopEditor !== undefined) && (window.location.protocol.indexOf('file') !== -1) ); // desktop detecting
 let isPluginLoading = false;                                         // flag plugins loading
@@ -49,6 +49,8 @@ let timeout = null;                                                  // delay fo
 let defaultBG = themeType == 'light' ? "#F5F5F5" : '#555555';        // default background color for plugin header
 let isResizeOnStart = false;                                         // flag for firs resize on start
 let slideIndex = 1;                                                  // index for slides
+let PsMain = null;                                                   // scroll for list of plugins
+let PsChangelog = null;                                               // scroll for changelog preview
 const proxyUrl = 'https://plugins-services.onlyoffice.com/proxy';    // url to proxy for getting rating
 const supportedScaleValues = [1, 1.25, 1.5, 1.75, 2];                // supported scale
 let scale = {                                                        // current scale
@@ -66,7 +68,10 @@ const languages = [                                                  // list of 
 	['ja-JA', 'ja', 'Japanese'],
 	['nl-NL', 'nl', 'Dutch'],
 	['pt-PT', 'pt', 'Portuguese'],
+	['pt-BR', 'pt', 'Brazilian'],
 	['ru-RU', 'ru', 'Russian'],
+	['si-SI', 'si', 'Sinhala'],
+	['uk-UA', 'uk', 'Ukrainian'],
 	['zh-ZH', 'zh', 'Chinese']
 ];
 const messages = {
@@ -94,6 +99,24 @@ switch (shortLang) {
 		break;
 	case 'cs':
 		translate["Loading"] = "Načítání"
+		break;
+	case 'it':
+		translate["Loading"] = "Caricamento"
+		break;
+	case 'ja':
+		translate["Loading"] = "積み込み"
+		break;
+	case 'pt':
+		translate["Loading"] = "Carregamento"
+		break;
+	case 'si':
+		translate["Loading"] = "පැටවීම"
+		break;
+	case 'uk':
+		translate["Loading"] = "Вантаження"
+		break;
+	case 'zh':
+		translate["Loading"] = "装载量"
 		break;
 }
 
@@ -128,8 +151,9 @@ window.onload = function() {
 	}
 	// init element
 	initElemnts();
-
 	isFrameLoading = false;
+	onTranslate();
+
 	if (shortLang == "en" || (!isPluginLoading && !isTranslationLoading)) {
 		// if nothing to translate
 		showMarketplace();
@@ -281,7 +305,7 @@ window.addEventListener('message', function(message) {
 					} else {
 						let pluginDiv = this.document.getElementById(message.guid)
 						$(pluginDiv).remove();
-						Ps.update();
+						PsMain.update();
 					}
 				} else {
 					changeAfterInstallOrRemove(false, message.guid, bHasLocal);
@@ -384,7 +408,7 @@ function fetchAllPlugins(bFirstRender, bshowMarketplace) {
 				getAllPluginsData(bFirstRender, bshowMarketplace);
 		},
 		function(err) {
-			createError( new Error( getTranslated( 'Problem with loading markeplace config.' ) ) );
+			createError( new Error('Problem with loading markeplace config.') );
 			isPluginLoading = false;
 			showMarketplace();
 		}
@@ -515,6 +539,8 @@ function initElemnts() {
 	elements.divVotes = document.getElementById('div_votes');
 	elements.arrowPrev = document.getElementById('prev_arrow');
 	elements.arrowNext = document.getElementById('next_arrow');
+	elements.divReadme = document.getElementById('div_readme_link');
+	elements.linkReadme = document.getElementById('link_readme');
 };
 
 function toogleLoader(show, text) {
@@ -551,14 +577,15 @@ function getAllPluginsData(bFirstRender, bshowMarketplace) {
 				config.baseUrl = pluginUrl;
 				arr[i] = config;
 				
-				makeRequest(pluginUrl + 'translations/langs.json', 'GET', null, null, true).then(
+				makeRequest(pluginUrl + 'translations/langs.json', 'GET', null, null, false).then(
 					function(response) {
 						let supportedLangs = [ getTranslated('English') ];
 						let arr = JSON.parse(response);
 						arr.forEach(function(full) {
 							let short = full.split('-')[0];
 							for (let i = 0; i < languages.length; i++) {
-								if (languages[i][0] == short || languages[i][1] == short) {
+								// detect only full language (because we can make mistake with some langs. for instance: "pt-PT" and "pt-BR")
+								if (languages[i][0] == full /*|| languages[i][1] == short*/) {
 									supportedLangs.push( getTranslated( languages[i][2] ) );
 								}
 							}
@@ -568,6 +595,14 @@ function getAllPluginsData(bFirstRender, bshowMarketplace) {
 					},
 					function(error) {
 						config.languages = [ getTranslated('English') ];
+					}
+				);
+				makeRequest(pluginUrl + 'CHANGELOG.md', 'GET', null, null, false).then(
+					function(response) {
+						let settings = getMarkedSetting();
+						let value = parseChangelog(response);
+						let lexed = marked.lexer(value, settings);
+						config.changelog = marked.parser(lexed, settings);
 					}
 				);
 				if (plugin.discussion) {
@@ -624,7 +659,7 @@ function getDiscussion(config) {
 			if (!discussionCount)
 				showRating();
 		}, function(err) {
-			createError('Problem with loading rating', true);
+			createError( new Error('Problem with loading rating'), true);
 			discussionCount--;
 			if (!discussionCount)
 				showRating();
@@ -703,18 +738,24 @@ function showListofPlugins(bAll, sortedArr) {
 			if (plugin && plugin.guid)
 				createPluginDiv(plugin, !bAll);
 		});
-		setTimeout(function(){if (Ps) Ps.update(); toogleLoader(false);});
+		setTimeout(function(){if (PsMain) PsMain.update(); toogleLoader(false);});
 	} else {
 		// if no istalled plugins and available plugins button was clicked
 		let notification = Array.isArray(sortedArr) ? 'Nothing was found for this query.' : bAll ? 'Problem with loading plugins.' : 'No installed plugins.';
 		createNotification(notification);
 		toogleLoader(false);
 	}
-	if (!Ps) {
-		Ps = new PerfectScrollbar('#div_main', {});
-		Ps.update();
+	// scroll for list of plugins
+	if (!PsMain) {
+		PsMain = new PerfectScrollbar('#div_main', {});
+		PsMain.update();
 	} else {
-		Ps.update();
+		PsMain.update();
+	}
+	// scroll for changelog preview
+	if (!PsChangelog) {
+		PsChangelog = new PerfectScrollbar('#div_selected_changelog', {});
+		PsChangelog.update();
 	}
 };
 
@@ -790,8 +831,8 @@ function createPluginDiv(plugin, bInstalled) {
 	}
 	
 	let variation = plugin.variations[0];
-	let name = (bTranslate && plugin.nameLocale && plugin.nameLocale[shortLang]) ? plugin.nameLocale[shortLang] : plugin.name;
-	let description = (bTranslate && variation.descriptionLocale && variation.descriptionLocale[shortLang]) ? variation.descriptionLocale[shortLang] : variation.description;
+	let name = ( bTranslate && plugin.nameLocale && ( plugin.nameLocale[lang] || plugin.nameLocale[shortLang] ) ) ? ( plugin.nameLocale[lang] || plugin.nameLocale[shortLang] ) : plugin.name;
+	let description = ( bTranslate && variation.descriptionLocale && ( variation.descriptionLocale[lang] || variation.descriptionLocale[shortLang] ) ) ? ( variation.descriptionLocale[lang] || variation.descriptionLocale[shortLang] ) : variation.description;
 	let bg = variation.store && variation.store.background ? variation.store.background[themeType] : defaultBG;
 	let additional = bNotAvailable ? 'disabled title="' + getTranslated(messages.versionWarning) + '"'  : '';
 	let template = '<div class="div_image" style="background: ' + bg + '">' +
@@ -820,7 +861,7 @@ function createPluginDiv(plugin, bInstalled) {
 					'</div>';
 	div.innerHTML = template;
 	elements.divMain.appendChild(div);
-	if (Ps) Ps.update();
+	if (PsMain) PsMain.update();
 };
 
 function showRating() {
@@ -963,7 +1004,7 @@ function onClickUpdateAll() {
 function onClickItem() {
 	// There we will make preview for selected plugin
 	let offered = "Ascensio System SIA";
-	
+	let hiddenCounter = 0;
 	let guid = this.getAttribute('data-guid');
 	let pluginDiv = document.getElementById(guid);
 	let divPreview = document.createElement('div');
@@ -988,14 +1029,15 @@ function onClickItem() {
 			elements.divRatingLink.setAttribute('title', getTranslated('No disscussion page for this plugin.'));
 	}
 
-	if ( !plugin || ( isLocal && installed ) ) {
+	if ( !plugin || ( isLocal && installed && plugin.baseUrl.includes('file:') ) ) {
 		elements.divGitLink.classList.add('hidden');
 		plugin = installed.obj;
 	} else {
 		elements.divGitLink.classList.remove('hidden');
 	}
 
-	let bCorrectUrl = isLocal || ( !plugin.baseUrl.includes('http://') && !plugin.baseUrl.includes('file:') && !plugin.baseUrl.includes('../'));
+	let bWebUrl = !plugin.baseUrl.includes('http://') && !plugin.baseUrl.includes('file:') && !plugin.baseUrl.includes('../');
+	let bCorrectUrl = isLocal || bWebUrl;
 
 	if (bCorrectUrl && plugin.variations[0].store && plugin.variations[0].store.screenshots && plugin.variations[0].store.screenshots.length) {
 		let arrScreens = plugin.variations[0].store.screenshots;
@@ -1024,8 +1066,8 @@ function onClickItem() {
 		slideIndex = 1;
 		showSlides(1);
 	} else {
-		elements.arrowPrev.classList.remove('hidden');
-		elements.arrowNext.classList.remove('hidden');
+		elements.arrowPrev.classList.add('hidden');
+		elements.arrowNext.classList.add('hidden');
 	}
 
 	let bHasUpdate = (pluginDiv.lastChild.firstChild.lastChild.tagName === 'SPAN' && !pluginDiv.lastChild.firstChild.lastChild.classList.contains('hidden'));
@@ -1036,6 +1078,7 @@ function onClickItem() {
 	} else {
 		elements.spanVersion.innerText = '';
 		elements.divVersion.classList.add('hidden');
+		hiddenCounter++;
 	}
 
 	if ( (installed && installed.obj.minVersion) || plugin.minVersion ) {
@@ -1044,7 +1087,8 @@ function onClickItem() {
 	} else {
 		elements.spanMinVersion.innerText = '';
 		elements.divMinVersion.classList.add('hidden');
-	}
+		hiddenCounter++;
+	}	
 
 	if (plugin.languages) {
 		elements.spanLanguages.innerText = plugin.languages.join(', ') + '.';
@@ -1052,6 +1096,15 @@ function onClickItem() {
 	} else {
 		elements.spanLanguages.innerText = '';
 		elements.divLanguages.classList.add('hidden');
+		hiddenCounter++;
+	}
+
+	if (plugin.changelog) {
+		document.getElementById('span_changelog').classList.remove('hidden');
+		document.getElementById('div_changelog_preview').innerHTML = plugin.changelog;
+	} else {
+		document.getElementById('span_changelog').classList.add('hidden');
+		document.getElementById('div_changelog_preview').innerHTML = '';
 	}
 
 	let pluginUrl = plugin.baseUrl.replace(OOMarketplaceUrl, (OOIO + 'tree/master/') );
@@ -1065,7 +1118,16 @@ function onClickItem() {
 	elements.spanName.innerHTML = this.children[1].children[0].innerText;
 	elements.spanOffered.innerHTML = plugin.offered || offered;
 	elements.spanSelectedDescr.innerHTML = this.children[1].children[1].innerText;
-	elements.linkPlugin.setAttribute('href', pluginUrl);
+	if (bWebUrl) {
+		elements.linkPlugin.setAttribute('href', pluginUrl);
+		elements.linkReadme.setAttribute('href', pluginUrl + 'README.md');
+		elements.divReadme.classList.remove('hidden');
+	} else {
+		elements.linkPlugin.setAttribute('href', '');
+		elements.linkReadme.setAttribute('href', '');
+		elements.divReadme.classList.add('hidden');
+	}
+	
 	if (discussionUrl)
 		elements.discussionLink.setAttribute('href', discussionUrl);
 	else
@@ -1092,10 +1154,16 @@ function onClickItem() {
 	if (pluginDiv.lastChild.lastChild.hasAttribute('disabled')) {// || pluginDiv.lastChild.lastChild.hasAttribute('dataDisabled')) {
 		elements.btnInstall.setAttribute('disabled','');
 		elements.btnInstall.setAttribute('title', getTranslated(messages.versionWarning));
-	}
-	else {
+	} else {
 		elements.btnInstall.removeAttribute('disabled');
 		elements.btnInstall.removeAttribute('title');
+	}
+
+	if (hiddenCounter == 3) {
+		// if versions and languages fields are hidden, we should hide this div
+		document.getElementById('div_plugin_info').classList.add('hidden');
+	} else {
+		document.getElementById('div_plugin_info').classList.remove('hidden');
 	}
 
 	elements.divSelected.classList.remove('hidden');
@@ -1117,22 +1185,25 @@ function onClickBack() {
 	elements.divSelected.classList.add('hidden');
 	elements.divSelectedMain.classList.add('hidden');
 	elements.divBody.classList.remove('hidden');
-	if(Ps) Ps.update();
+	if(PsMain) PsMain.update();
 };
 
-function onSelectPreview(target, isOverview) {
+function onSelectPreview(target, type) {
 	// change mode of preview
 	if ( !target.classList.contains('span_selected') ) {
 		$(".span_selected").removeClass("span_selected");
 		target.classList.add("span_selected");
+		$(".div_selected_preview").addClass("hidden");
 
-		if (isOverview) {
-			document.getElementById('div_selected_info').classList.add('hidden');
+		// type: 1 - Overview; 2 - Info; 3 - Changelog;
+		if (type === 1) {
 			document.getElementById('div_selected_preview').classList.remove('hidden');
 			setDivHeight();
-		} else {
-			document.getElementById('div_selected_preview').classList.add('hidden');
+		} else if (type === 2) {
 			document.getElementById('div_selected_info').classList.remove('hidden');
+		} else {
+			document.getElementById('div_selected_changelog').classList.remove('hidden');
+			PsChangelog.update();
 		}
 	}
 };
@@ -1168,7 +1239,8 @@ function createError(err, bDontShow) {
 	background.className = 'asc-plugin-loader';
 	let span = document.createElement('span');
 	span.className = 'error_caption';
-	span.innerHTML = err.message || getTranslated('Problem with loading some resources');
+	let message = err.message || 'Problem with loading some resources';
+	span.innerHTML = getTranslated(message);
 	background.appendChild(span);
 	divErr.appendChild(background);
 	divErr.classList.remove('hidden');
@@ -1181,7 +1253,7 @@ function createError(err, bDontShow) {
 
 function setDivHeight() {
 	// set height for div with image in preview mode
-	if (Ps) Ps.update();
+	if (PsMain) PsMain.update();
 	// console.log(Math.round(window.devicePixelRatio * 100));
 	if (elements.divScreen) {
 		let height = elements.divScreen.parentNode.clientHeight - elements.divScreen.previousElementSibling.clientHeight - 70 + 'px';
@@ -1220,6 +1292,7 @@ window.onresize = function(bForce) {
 		}
 		$('.div_item').css('border', ((revZoom > 1 ? 1 : revZoom) +'px solid ' + (themeType == 'ligh' ? '#c0c0c0' : '#666666')));
 	}
+	if (PsChangelog) PsChangelog.update();
 };
 
 // zoom on start if we start with a non 100% zoom
@@ -1285,10 +1358,11 @@ function getTranslation() {
 						function(res) {
 							// console.log('getTranslation: ' + (Date.now() - start));
 							translate = JSON.parse(res);
+							isTranslationLoading = false;
 							onTranslate();
 						},
 						function(err) {
-							createError( new Error( getTranslated( 'Cannot load translation for current language.' ) ) );
+							createError( new Error('Cannot load translation for current language.') );
 							isTranslationLoading = false;
 							showMarketplace();
 						}
@@ -1299,7 +1373,7 @@ function getTranslation() {
 				}	
 			},
 			function(err) {
-				createError( new Error( getTranslated( 'Cannot load translations list file.' ) ) );
+				createError( new Error('Cannot load translations list file.') );
 				isTranslationLoading = false;
 				showMarketplace();
 			}
@@ -1311,8 +1385,10 @@ function getTranslation() {
 };
 
 function onTranslate() {
-	isTranslationLoading = false;
 	// translates elements on current language
+	if (isFrameLoading || isTranslationLoading)
+		return;
+
 	elements.linkNewPlugin.innerHTML = getTranslated(messages.linkPR);
 	elements.btnAvailablePl.innerHTML = getTranslated('Available plugins');
 	elements.btnMarketplace.innerHTML = getTranslated('Marketplace');
@@ -1519,7 +1595,7 @@ function toogleView(current, oldEl, text, bAll, bForce) {
 		if ( ( bAll && (!isOnline || isPluginLoading) ) || flag) {
 			$('.div_notification').remove();
 			$('.div_item').remove();
-			setTimeout(function(){if (Ps) Ps.update()});
+			setTimeout(function(){if (PsMain) PsMain.update()});
 			toolbar.classList.add('hidden');
 			createNotification('No Internet Connection.', 'Problem with loading some resources')
 		} else {
@@ -1531,7 +1607,7 @@ function toogleView(current, oldEl, text, bAll, bForce) {
 				filterByCategory(document.getElementById('select_categories').value);
 			}
 		}
-		elements.linkNewPlugin.href = bAll ? (OOIO + "pulls") : "https://api.onlyoffice.com/plugin/installation";
+		elements.linkNewPlugin.href = bAll ? (OOIO + "pulls") : "https://api.onlyoffice.com/docs/plugin-and-macros/tutorials/installing/";
 
 		if (isLocal && !bAll) {
 			elements.linkNewPlugin.href = "#";
@@ -1553,6 +1629,8 @@ function installPluginManually() {
 		if (result) {
 			// нужно обновить список установленных плагинов
 			sendMessage({ type: 'getInstalled', updateInstalled: true }, '*');
+		} else {
+			createError(new Error('Problem with plugin installation.'), false);
 		}
 	});
 };
@@ -1604,7 +1682,7 @@ function makeSearch(val) {
 		let bUpdate = false;
 		let arr = plugins.filter(function(el) {
 			let plugin = el.obj || el;
-			let name = (plugin.nameLocale && plugin.nameLocale[shortLang]) ? plugin.nameLocale[shortLang] : plugin.name;
+			let name = (plugin.nameLocale && ( plugin.nameLocale[lang] || plugin.nameLocale[shortLang] ) ) ? ( plugin.nameLocale[lang] || plugin.nameLocale[shortLang] ) : plugin.name;
 			return name.toLowerCase().includes(val);
 		});
 
@@ -1750,33 +1828,51 @@ function getTranslated(text) {
 
 function parseRatingPage(data) {
 	// if we load this page, parse it
-	// remove head, because it can brake our styles
+	let result = null;
 	if (data !== 'Not Found') {
-		let start = data.indexOf('<head>');
-		let end = data.indexOf('</head>') + 7;
-		document.getElementById('div_rating_git').innerHTML = data.substring(0, start) + data.substring(end);
-		// we will have a problem if github change their page
-		let first = Number(document.getElementById('result-row-1').childNodes[1].childNodes[3].innerText.replace(/[\n\s%]/g,''));
-		let second = Number(document.getElementById('result-row-2').childNodes[1].childNodes[3].innerText.replace(/[\n\s%]/g,''));
-		let third = Number(document.getElementById('result-row-3').childNodes[1].childNodes[3].innerText.replace(/[\n\s%]/g,''));
-		let fourth = Number(document.getElementById('result-row-4').childNodes[1].childNodes[3].innerText.replace(/[\n\s%]/g,''));
-		let fifth = Number(document.getElementById('result-row-5').childNodes[1].childNodes[3].innerText.replace(/[\n\s%]/g,''));
-		let total = Number(document.getElementsByClassName('text-small color-fg-subtle')[0].childNodes[1].firstChild.textContent.replace(/[\n\sa-z]/g,''));
-		first = Math.ceil(total * first / 100) * 5;   // it's 5 stars
-		second = Math.ceil(total * second / 100) * 4; // it's 4 stars
-		third = Math.ceil(total * third / 100) * 3;   // it's 3 stars
-		fourth = Math.ceil(total * fourth / 100) * 2; // it's 2 stars
-		fifth = Math.ceil(total * fifth / 100);       // it's 1 star
-		let average = total === 0 ? 0 : (first + second + third + fourth + fifth) / total;
-		let percent = average / 5 * 100 + '%';
-		return {
-			total: total,
-			average: average.toFixed(1),
-			percent: percent
-		};
-	} else {
-		return null;
+		try {
+			let parser = new DOMParser();
+			let doc = parser.parseFromString(data, "text/html");
+			// we will have a problem if github change their page
+			let first = Number(doc.getElementById('result-row-1').childNodes[1].childNodes[3].innerText.replace(/[\n\s%]/g,''));
+			let second = Number(doc.getElementById('result-row-2').childNodes[1].childNodes[3].innerText.replace(/[\n\s%]/g,''));
+			let third = Number(doc.getElementById('result-row-3').childNodes[1].childNodes[3].innerText.replace(/[\n\s%]/g,''));
+			let fourth = Number(doc.getElementById('result-row-4').childNodes[1].childNodes[3].innerText.replace(/[\n\s%]/g,''));
+			let fifth = Number(doc.getElementById('result-row-5').childNodes[1].childNodes[3].innerText.replace(/[\n\s%]/g,''));
+			let total = Number(doc.getElementsByClassName('text-small color-fg-subtle')[0].childNodes[1].firstChild.textContent.replace(/[\n\sa-z]/g,''));
+			first = Math.ceil(total * first / 100) * 5;   // it's 5 stars
+			second = Math.ceil(total * second / 100) * 4; // it's 4 stars
+			third = Math.ceil(total * third / 100) * 3;   // it's 3 stars
+			fourth = Math.ceil(total * fourth / 100) * 2; // it's 2 stars
+			fifth = Math.ceil(total * fifth / 100);       // it's 1 star
+			let average = total === 0 ? 0 : (first + second + third + fourth + fifth) / total;
+			let percent = average / 5 * 100 + '%';
+			result = {
+				total: total,
+				average: average.toFixed(1),
+				percent: percent
+			};
+		} catch (error) {
+			// nothing to do
+		}
 	}
+	return result;
+};
+
+function parseChangelog(data) {
+	let arr = data.replace('# Change Log', '').split('\n\n## ');
+	if (arr[0] == '')
+		arr.shift();
+
+	let indLast = arr.length - 1;
+	let end = arr[0].indexOf('\n\n');
+	let firstVersion = getPluginVersion( arr[0].slice(0, end) );
+	end = arr[indLast].indexOf('\n\n');
+	let lastVersion = getPluginVersion( arr[indLast].slice(0, end) );
+	if (lastVersion > firstVersion)
+		arr = arr.reverse();
+
+	return ( '## ' + arr.join('\n\n## ') );
 };
 
 function checkNoUpdated(bRemove) {
@@ -1823,4 +1919,33 @@ function showSlides(n) {
 
 	if(dots.length)
 		dots[slideIndex-1].className += ' active';
+};
+
+function getMarkedSetting() {
+	// function for marked librry
+	let defaults = {};
+	const settings = {};
+	if (typeof marked.getDefaults === 'function') {
+		defaults = marked.getDefaults();
+	} else if ('defaults' in marked) {
+		for (let prop in marked.defaults) {
+			defaults[prop] = marked.defaults[prop];
+		}
+	}
+
+	const invalidOptions = [
+		'renderer',
+		'tokenizer',
+		'walkTokens',
+		'extensions',
+		'highlight',
+		'sanitizer'
+	];
+
+	for (let prop in defaults) {
+		if (!invalidOptions.includes(prop))
+		settings[prop] = defaults[prop]
+	}
+
+	return settings;
 };

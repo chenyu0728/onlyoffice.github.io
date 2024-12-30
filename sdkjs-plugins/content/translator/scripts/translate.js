@@ -20,7 +20,7 @@
 	var isInit = false;
 	var ifr;
 	const isIE = checkInternetExplorer();	//check IE
-	var message = "This plugin doesn't work in Internet Explorer."
+	var prevTxt;
 	var txt;
 	var paste_done  = true;
 	var translated = '';
@@ -28,15 +28,17 @@
 	window.Asc.plugin.init = function(text)
 	{
 		if (isIE) {
-			document.getElementById("iframe_parent").innerHTML = "<h4 id='h4' style='margin:5px'>" + message + "</h4>";
+			showMessage("This plugin doesn't work in Internet Explorer.");
 			return;
 		}
 		if (window.Asc.plugin.info.editorType === 'word') {
 			window.Asc.plugin.executeMethod("GetSelectedText", [{Numbering:false}], function(data) {
+				prevTxt = txt;
 				txt = (!data) ? "" : ProcessText(data);
 				ExecPlugin();
 			});
 		} else {
+			prevTxt = txt;
 			txt = ProcessText(text);
 			ExecPlugin();
 		}
@@ -59,14 +61,22 @@
 			isInit = true;
 			ifr.onload = function() {
 				if (ifr.contentWindow.document.readyState == 'complete')
-				    window.Asc.plugin.onThemeChanged(Asc.plugin.theme);
+					window.Asc.plugin.onThemeChanged(Asc.plugin.theme);
 					setTimeout(function() {
-						ifr.contentDocument.getElementById("google_translate_element").innerHTML = escape(txt);
-						if (txt.length)
-							ifr.contentDocument.getElementById("div_btn").classList.remove("hidden");
+						let element = ifr.contentDocument ? ifr.contentDocument.getElementById("google_translate_element") : null;
+						if (element) {
+							element.innerHTML = escape(txt);
+							if (txt.length)
+								ifr.contentDocument.getElementById("div_btn").classList.remove("hidden");
+						}
 					}, 500);
 
 				var selectElement = ifr.contentDocument.getElementsByClassName('goog-te-combo')[0];
+				if (!selectElement) {
+					// in this case plugin won't work (it can be problem with region)
+					showMessage(window.Asc.plugin.tr("This plugin doesn't work in your region."));
+					return;
+				}
 				selectElement.addEventListener('change', function(event) {
 					if (txt || ifr.contentDocument.getElementById("google_translate_element").innerHTML) {
 						ifr.contentWindow.postMessage("onchange_goog-te-combo", '*');
@@ -153,11 +163,11 @@
 				ifr.contentWindow.postMessage("update_scroll", '*');
 				ifr.contentWindow.postMessage({type: 'translate', text: translated}, '*')
 			}
-		} else {
+		} else if(prevTxt != txt) {
 			ifr.contentWindow.postMessage(txt, '*');
 			ifr.contentDocument.getElementById("google_translate_element").style.opacity = 0;
 		}
-    };
+	};
 	function ProcessText(sText) {
 		return sText.replace(/	/gi, '\n').replace(/	/gi, '\n');
 	};
@@ -181,6 +191,10 @@
 		return rv !== -1;
 	};
 
+	function showMessage(message) {
+		document.getElementById("iframe_parent").innerHTML = "<h4 id='h4' style='margin:5px'>" + message + "</h4>";
+	};
+
 	window.Asc.plugin.button = function(id)
 	{
 		this.executeCommand("close", "");
@@ -202,19 +216,18 @@
 
 	window.Asc.plugin.onTranslate = function()
 	{
-		if (isIE) {
-			var field = document.getElementById("h4");
-			if (field)
-				field.innerHTML = message = window.Asc.plugin.tr(message);
-		}
+		var field = document.getElementById("h4");
+		if (field)
+			field.innerHTML = window.Asc.plugin.tr(field.innerText);
+
 		translated = window.Asc.plugin.tr('Select Language');
 	};
-    window.Asc.plugin.onThemeChanged = function(theme)
+	window.Asc.plugin.onThemeChanged = function(theme)
 	{
 		window.Asc.plugin.onThemeChangedBase(theme);
 		var style = document.getElementsByTagName('head')[0].lastChild;
 		if (ifr && ifr.contentWindow)
-			setTimeout( function() { ifr.contentWindow.postMessage({type: 'themeChanged', theme: theme, style: style.innerHTML}, '*' ) } ,600 );
+			setTimeout( function() { ifr.contentDocument && ifr.contentWindow.postMessage({type: 'themeChanged', theme: theme, style: style.innerHTML}, '*' ) } ,600 );
 	};
-
+	
 })(window, undefined);

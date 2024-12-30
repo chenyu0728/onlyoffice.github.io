@@ -6,4 +6,8 @@
 
 ## 1.0.1
 
-* Enable plugin for IE.
+* Disable plugin for IE.
+
+## 1.0.2
+
+* Add "pdf" to the supported editors.

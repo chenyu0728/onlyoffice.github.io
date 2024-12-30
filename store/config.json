@@ -9,7 +9,6 @@
 	{ "name": "wordpress", "discussion": "228" },
 	{ "name": "autocomplete", "discussion": "229" },
 	{ "name": "drawio", "discussion": "230" },
-	{ "name": "easybib", "discussion": "231" },
 	{ "name": "highlightcode", "discussion": "232" },
 	{ "name": "html", "discussion": "233" },
 	{ "name": "jitsi", "discussion": "234" },
@@ -25,8 +24,13 @@
 	{ "name": "zotero", "discussion": "244" },
 	{ "name": "languagetool", "discussion": "245" },
 	{ "name": "chess", "discussion": "246" },
-	{ "name": "openai", "discussion": "248" },
+	{ "name": "ai", "discussion": "248" },
 	{ "name": "speechrecognition", "discussion": "249" },
 	{ "name": "zhipu", "discussion": "273"},
-	{ "name": "glavred", "discussion": "274" }
+	{ "name": "glavred", "discussion": "274" },
+	{ "name": "termef", "discussion": "295" },
+	{ "name": "pixabay", "discussion": "325" },
+	{ "name": "insertQR", "discussion": "" },
+	{ "name": "idphoto", "discussion": "" },
+	{ "name": "cvbuilder", "discussion": "" }
 ]

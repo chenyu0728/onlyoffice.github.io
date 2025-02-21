@@ -41,7 +41,7 @@
 					resolve(new TextResponse(this.response, false));
 			};
 			xhr.onerror = function() {
-				reject(new TextResponse(this.response, false));
+				reject(new TextResponse(this.response || "Failed to fetch.", false));
 			};
 
 			xhr.send(obj.body);
@@ -53,7 +53,7 @@
 {
 	async function requestWrapper(message) {
 		return new Promise(function (resolve, reject) {
-			if (AI.isLocalDesktop && AI.isLocalUrl(message.url)) {
+			if (AI.isLocalDesktop && (AI.isLocalUrl(message.url) || message.isUseProxy)) {
 				window.AscSimpleRequest.createRequest({
 					url: message.url,
 					method: message.method,
@@ -73,8 +73,22 @@
 					method: message.method,
 					headers: message.headers
 				};
-				if (request.method != "GET")
+				if (request.method != "GET") {
 					request.body = message.isBlob ? message.body : (message.body ? JSON.stringify(message.body) : "");
+
+					if (message.isUseProxy) {
+						request = {
+							"method" : request.method,
+							"body" : JSON.stringify({
+								"target" : message.url,
+								"method" : request.method,
+								"headers" : request.headers,
+								"data" : request.body
+							})
+						}
+						message.url = AI.PROXY_URL;					
+					}
+				}				
 
 				fetch(message.url, request)
 					.then(function(response) {
@@ -95,10 +109,18 @@
 
 	AI.TmpProviderForModels = null;
 
+	AI.PROXY_URL = "https://plugins-services.onlyoffice.com/proxy";
+
 	AI._getHeaders = function(_provider) {
 		let provider = _provider.createInstance ? _provider : AI.Storage.getProvider(_provider.name);
 		if (!provider) provider = new AI.Provider();
-		return provider.getRequestHeaderOptions(_provider.key);
+		return provider.getRequestHeaderOptions();
+	};
+
+	AI._getModelsSync = function(_provider) {
+		let provider = _provider.createInstance ? _provider : AI.Storage.getProvider(_provider.name);
+		if (!provider) provider = new AI.Provider();
+		return provider.getModels();
 	};
 
 	AI._extendBody = function(_provider, body) {
@@ -106,17 +128,23 @@
 		if (!provider) provider = new AI.Provider();
 		let bodyPr = provider.getRequestBodyOptions();
 
+		if (provider.isUseProxy())
+			bodyPr.target = provider.url;
+
 		for (let i in bodyPr) {
 			if (!body[i])
 				body[i] = bodyPr[i];
 		}
 
-		return;
+		return provider.isUseProxy();
 	};
 
-	AI._getEndpointUrl = function(_provider, endpoint) {
+	AI._getEndpointUrl = function(_provider, endpoint, model) {
 		let provider = _provider.createInstance ? _provider : AI.Storage.getProvider(_provider.name);
 		if (!provider) provider = new AI.Provider(_provider.name, _provider.url, _provider.key);
+
+		if (_provider.key)
+			provider.key = _provider.key;
 
 		let url = provider.url;
 		if (url.endsWith("/"))
@@ -129,22 +157,15 @@
 				url += plus;
 		}
 
-		let override = provider.overrideEndpointUrl(endpoint);
-		if (undefined !== override)
-			return override;
-		return url + AI.Endpoints.getUrl(endpoint);
+		return url + provider.getEndpointUrl(endpoint, model);
 	};
 
 	AI.getModels = async function(provider)
 	{
 		AI.TmpProviderForModels = null;
 		return new Promise(function (resolve, reject) {
-			let headers = AI._getHeaders(provider);
-			requestWrapper({
-				url : AI._getEndpointUrl(provider, AI.Endpoints.Types.v1.Models),
-				headers : headers,
-				method : "GET"
-			}).then(function(data) {
+
+			function resolveRequest(data) {
 				if (data.error)
 					resolve({
 						error : 1,
@@ -152,16 +173,20 @@
 						models : []
 					});
 				else {
-					AI.TmpProviderForModels = AI.Provider.createInstance(provider.name, provider.url, provider.key);
-					for (let i = 0, len = data.data.length; i < len; i++)
+					AI.TmpProviderForModels = AI.createProviderInstance(provider.name, provider.url, provider.key);
+					let models = data.data;
+					if (data.data.models)
+						models = data.data.models;
+					for (let i = 0, len = models.length; i < len; i++)
 					{
-						let model = data.data[i];
+						let model = models[i];
+						AI.TmpProviderForModels.correctModelInfo(model);
+						
 						if (!model.id)
 							continue;
 
-						model.name = model.id;
 						model.endpoints = [];
-						model.options = {};
+						model.options = {};						
 
 						if (AI.TmpProviderForModels.checkExcludeModel(model))
 							continue;
@@ -178,6 +203,25 @@
 						models : AI.TmpProviderForModels.modelsUI
 					});
 				}
+			}
+
+			let syncModels = AI._getModelsSync(provider);
+			if (Array.isArray(syncModels))
+			{
+				resolveRequest({
+					error : 0,
+					data : syncModels
+				});
+				return;
+			}
+
+			let headers = AI._getHeaders(provider);
+			requestWrapper({
+				url : AI._getEndpointUrl(provider, AI.Endpoints.Types.v1.Models),
+				headers : headers,
+				method : "GET"
+			}).then(function(data) {
+				resolveRequest(data);
 			});
 		});
 	};
@@ -198,7 +242,9 @@
 
 			if (provider) {
 				for (let i = 0, len = provider.models.length; i < len; i++) {
-					if (model.id === provider.models[i].id) {
+					if (model.id === provider.models[i].id ||
+						model.id === provider.models[i].name)
+					{
 						this.model = provider.models[i];
 					}
 				}
@@ -300,9 +346,19 @@
 
 		let headers = AI._getHeaders(provider);
 
-		let input_len = content.length;
-		let input_tokens = Asc.OpenAIEncode(content).length;
+		let isMessages = Array.isArray(content);
 
+		if (isUseCompletionsInsteadChat && isMessages) {
+			content = content[content.length - 1].content;
+			isMessages = false;
+		}
+
+		if (isMessages)
+			isNoSplit = true;
+
+		let input_len = content.length;
+		let input_tokens = isMessages ? 0 : Asc.OpenAIEncode(content).length;
+		
 		let messages = [];
 		if (input_tokens < max_input_tokens || isNoSplit) {
 			messages.push(content);
@@ -328,41 +384,28 @@
 
 		let endpointType = isUseCompletionsInsteadChat ? AI.Endpoints.Types.v1.Completions :
 			AI.Endpoints.Types.v1.Chat_Completions;
-		objRequest.url = AI._getEndpointUrl(provider, endpointType);
+		objRequest.url = AI._getEndpointUrl(provider, endpointType, this.model);
 
-		objRequest.body = {
-			model : this.modelUI.id
-		};
-
-		AI._extendBody(provider, objRequest.body);
-
+		let requestBody = {};
 		let processResult = function(data) {
-			let arrResult = data.data.choices || data.data.content;
-			if (!arrResult)
+			let result = provider.getChatCompletionsResult(data, this.model);
+			if (result.content.length === 0)
 				return "";
-			let choice = arrResult[0];
-			if (!choice)
-				return "";
-			let text = "";
-			if (choice.message)
-				text = choice.message.content;
-			if (choice.text)
-				text = choice.text;
-
-			let i = 0; let trimStartCh = "\n".charCodeAt(0);
-			while (text.charCodeAt(i) === trimStartCh)
-				i++;
-			if (i > 0)
-				text = text.substring(i);
-			return text; 
+			return result.content[0];
 		};
 
 		if (1 === messages.length) {
 			if (!isUseCompletionsInsteadChat) {
-				objRequest.body.messages = [{role:"user",content:messages[0]}];
+				if (isMessages)
+					requestBody.messages = messages[0];
+				else
+					requestBody.messages = [{role:"user",content:messages[0]}];
+				objRequest.body = provider.getChatCompletions(requestBody, this.model);
 			} else {
-				objRequest.body.prompt = messages[0];				
+				objRequest.body = provider.getCompletions({ text : messages[0] });
 			}
+
+			objRequest.isUseProxy = AI._extendBody(provider, objRequest.body);
 
 			let result = await requestWrapper(objRequest);
 			if (result.error) {
@@ -401,15 +444,16 @@
 				return footer;
 			}
 
-			let isBadAI = false;
 			for (let i = 0, len = messages.length; i < len; i++) {
 				
 				let message = getHeader(i + 1, len) + messages[i] + getFooter(i + 1, len);
 				if (!isUseCompletionsInsteadChat) {
-					objRequest.body.messages = [{role:"user",content:message}];
+					objRequest.body = provider.getChatCompletions({ messages : [{role:"user",content:message}] });
 				} else {
-					objRequest.body.prompt = message;				
+					objRequest.body = provider.getCompletions( { text : message });
 				}
+
+				objRequest.isUseProxy = AI._extendBody(provider, objRequest.body);
 
 				let result = await requestWrapper(objRequest);
 				if (result.error) {
